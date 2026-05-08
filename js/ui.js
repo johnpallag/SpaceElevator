@@ -145,6 +145,26 @@ function uiUpdateMeters() {
     const km = Math.round(s.cabin.altitude * 100000);
     altEl.textContent = 'ALT: ' + (km >= 1000 ? (km / 1000).toFixed(1) + 'k' : km) + ' km';
   }
+
+  // Request queue countdowns
+  for (const r of s.requestQueue) {
+    const el = document.getElementById('req-dl-' + r.id);
+    if (!el) continue;
+    const tr = Math.ceil(r.timeRemaining);
+    el.textContent = ' ' + tr + 's';
+    el.className   = 'req-deadline ' + (tr < 30 ? 'urgent' : tr < 80 ? 'warn' : 'ok');
+    const card = el.closest('.req-card');
+    if (card) card.className = 'req-card' + (tr < 30 ? ' urgent' : '');
+  }
+
+  // Active delivery countdowns
+  for (const d of s.activeDeliveries) {
+    const el = document.getElementById('del-dl-' + d.id);
+    if (!el) continue;
+    const tr = Math.ceil(d.timeRemaining);
+    el.textContent = ' ' + (tr > 0 ? tr + 's' : 'OVERDUE');
+    el.className   = 'req-deadline ' + (tr < 20 ? 'urgent' : tr < 60 ? 'warn' : 'ok');
+  }
 }
 
 // ── Full sidebar rebuild (called on state change) ─────────────────────────────
@@ -176,7 +196,7 @@ function _renderActiveDeliveries() {
         <span class="req-type" style="color:${cfg.color}">[${cfg.label}]</span>
         <span class="req-route"> ${_stShort(d.from)}→${_stShort(d.to)}</span><br>
         <span class="delivery-status">${phase}</span>
-        <span class="req-deadline ${urgClass}"> ${tr > 0 ? tr + 's' : 'OVERDUE'}</span>
+        <span class="req-deadline ${urgClass}" id="del-dl-${d.id}"> ${tr > 0 ? tr + 's' : 'OVERDUE'}</span>
       </div>`;
   }
   el.innerHTML = html;
@@ -207,7 +227,7 @@ function _renderRequestQueue() {
         <span class="req-type" style="color:${cfg.color}">[${cfg.label}]</span>
         <span class="req-route"> ${_stShort(r.from)} → ${_stShort(r.to)}</span><br>
         <span class="req-meta">+${r.reward}CR</span>
-        <span class="req-deadline ${urgClass}"> ${tr}s</span>
+        <span class="req-deadline ${urgClass}" id="req-dl-${r.id}"> ${tr}s</span>
         <div class="req-buttons">
           <button class="btn-acc" ${full ? 'disabled title="Cabin full"' : ''} onclick="requestAccept(${r.id})">ACC</button>
           <button class="btn-rej" onclick="requestReject(${r.id})">REJ</button>
