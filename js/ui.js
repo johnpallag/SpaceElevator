@@ -2,10 +2,16 @@
 
 let _uiCanvas;
 
-// Drag-pan state
+// Drag-pan state (mouse)
 let _dragStartY = null;
 let _dragLastY  = null;
 let _didDrag    = false;
+
+// Touch state
+let _touchStartY    = 0;
+let _touchLastY     = 0;
+let _lastPinchDist  = null;
+let _touchIsPinch   = false;
 
 function uiInit(canvas) {
   _uiCanvas = canvas;
@@ -20,6 +26,7 @@ function uiInit(canvas) {
     renderSetZoom(e.deltaY);
   }, { passive: false });
 
+  // ── Mouse drag ──────────────────────────────────────────
   canvas.addEventListener('mousedown', function(e) {
     _dragStartY = e.clientY;
     _dragLastY  = e.clientY;
@@ -43,6 +50,63 @@ function uiInit(canvas) {
     _dragLastY  = null;
     _dragStartY = null;
   });
+
+  // ── Touch: pinch-zoom + drag-pan + tap-to-select ────────
+  canvas.addEventListener('touchstart', function(e) {
+    e.preventDefault();
+    _touchIsPinch = e.touches.length >= 2;
+    if (e.touches.length === 1) {
+      _touchStartY = _touchLastY = e.touches[0].clientY;
+      _dragStartY  = _touchLastY;
+      _didDrag     = false;
+      _lastPinchDist = null;
+    } else if (e.touches.length === 2) {
+      const t0 = e.touches[0], t1 = e.touches[1];
+      _lastPinchDist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    if (e.touches.length >= 2) {
+      // Pinch to zoom
+      const t0   = e.touches[0], t1 = e.touches[1];
+      const dist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+      if (_lastPinchDist !== null) {
+        const rect = _uiCanvas.getBoundingClientRect();
+        const cx   = ((t0.clientX + t1.clientX) / 2 - rect.left) * (_uiCanvas.width  / rect.width);
+        const cy   = ((t0.clientY + t1.clientY) / 2 - rect.top)  * (_uiCanvas.height / rect.height);
+        renderSetZoomCenter(cx, cy);
+        renderSetZoom((_lastPinchDist - dist) * 4);
+      }
+      _lastPinchDist = dist;
+      _touchIsPinch  = true;
+    } else if (e.touches.length === 1 && !_touchIsPinch) {
+      // Single-finger drag to pan
+      const clientY = e.touches[0].clientY;
+      if (Math.abs(clientY - _touchStartY) > 4) _didDrag = true;
+      if (_didDrag) {
+        const rect   = _uiCanvas.getBoundingClientRect();
+        renderPan((clientY - _touchLastY) * (_uiCanvas.height / rect.height));
+      }
+      _touchLastY = clientY;
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', function(e) {
+    e.preventDefault();
+    // Tap (no drag, no pinch) → station select
+    if (!_didDrag && !_touchIsPinch && e.changedTouches.length === 1) {
+      const t    = e.changedTouches[0];
+      const rect = _uiCanvas.getBoundingClientRect();
+      _handleStationSelect(
+        (t.clientX - rect.left) * (_uiCanvas.width  / rect.width),
+        (t.clientY - rect.top)  * (_uiCanvas.height / rect.height)
+      );
+    }
+    if (e.touches.length < 2) _lastPinchDist = null;
+    if (e.touches.length === 0) { _touchIsPinch = false; _didDrag = false; }
+  }, { passive: false });
 
   uiRenderSidebar();
 }
@@ -214,6 +278,15 @@ function uiBuyUpgrade(id) {
   uiRenderSidebar();
 }
 
+// ── Panel toggle (mobile) ─────────────────────────────────────────────────────
+function uiTogglePanel() {
+  const panel    = document.getElementById('panel-content');
+  const btn      = document.getElementById('panel-toggle-btn');
+  if (!panel || !btn) return;
+  const expanded = panel.classList.toggle('expanded');
+  btn.textContent = expanded ? '[ ▼ HIDE ]' : '[ ▲ INFO ]';
+}
+
 // ── Track button ──────────────────────────────────────────────────────────────
 function uiToggleTracking() {
   const tracking = renderToggleTracking();
@@ -225,37 +298,35 @@ function uiToggleTracking() {
   }
 }
 
-// ── Canvas click handler ──────────────────────────────────────────────────────
-function _handleCanvasClick(e) {
-  if (_didDrag) { _didDrag = false; return; }
+// ── Canvas click / tap handler ────────────────────────────────────────────────
+function _handleStationSelect(clickX, clickY) {
   if (STATE.gameOver) return;
-
-  const rect     = _uiCanvas.getBoundingClientRect();
-  const clickX   = (e.clientX - rect.left) * (_uiCanvas.width  / rect.width);
-  const clickY   = (e.clientY - rect.top)  * (_uiCanvas.height / rect.height);
-  const cableX   = getCableX();
-
-  // Must click within ±50px of cable (scale threshold with zoom)
+  const cableX = getCableX();
   if (Math.abs(clickX - cableX) > 50 * Math.max(1, getZoom())) return;
 
-  const clickAlt = screenYToAlt(clickY);  // zoom-aware
+  const clickAlt = screenYToAlt(clickY);
   let nearest = null, nearestDist = Infinity;
-
   for (const st of CONFIG.STATIONS) {
     const dist = Math.abs(st.alt - clickAlt);
     if (dist < nearestDist && dist < 0.1 / Math.max(0.5, getZoom())) {
-      nearest     = st;
-      nearestDist = dist;
+      nearest = st; nearestDist = dist;
     }
   }
-
   if (nearest) {
-    // Player manual override always wins
     STATE.cabin.destination = nearest.id;
     stateLog('Heading to ' + nearest.label);
     uiRenderSidebar();
     playBeep(440, 0.07, 'square');
   }
+}
+
+function _handleCanvasClick(e) {
+  if (_didDrag) { _didDrag = false; return; }
+  const rect = _uiCanvas.getBoundingClientRect();
+  _handleStationSelect(
+    (e.clientX - rect.left) * (_uiCanvas.width  / rect.width),
+    (e.clientY - rect.top)  * (_uiCanvas.height / rect.height)
+  );
 }
 
 let _hoveredStation = null;

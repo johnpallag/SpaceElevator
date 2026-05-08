@@ -25,22 +25,27 @@
       <div id="altitude-display">ALT: 0 km</div>
     </div>
 
-    <div id="active-deliveries">
-      <div class="section-title">-- ACTIVE --</div>
-      <div class="empty-msg">No active deliveries</div>
+    <div id="panel-content">
+      <div id="active-deliveries">
+        <div class="section-title">-- ACTIVE --</div>
+        <div class="empty-msg">No active deliveries</div>
+      </div>
+
+      <div id="request-queue">
+        <div class="section-title">-- REQUESTS --</div>
+        <div class="empty-msg">Awaiting requests...</div>
+      </div>
+
+      <div id="event-log">
+        <div class="section-title">-- LOG --</div>
+      </div>
     </div>
 
-    <div id="request-queue">
-      <div class="section-title">-- REQUESTS --</div>
-      <div class="empty-msg">Awaiting requests...</div>
+    <div id="bottom-bar">
+      <button id="panel-toggle-btn" onclick="uiTogglePanel()">[ ▲ INFO ]</button>
+      <button id="track-btn" onclick="uiToggleTracking()">[ TRACK: ON ]</button>
+      <button id="upgrade-btn" onclick="uiShowUpgrades()">[ UPGRADES ]</button>
     </div>
-
-    <div id="event-log">
-      <div class="section-title">-- LOG --</div>
-    </div>
-
-    <button id="track-btn" onclick="uiToggleTracking()">[ TRACK: ON ]</button>
-    <button id="upgrade-btn" onclick="uiShowUpgrades()">[ UPGRADES ]</button>
   </div>
 
   <div id="upgrade-modal" class="hidden">

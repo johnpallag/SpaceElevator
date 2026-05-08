@@ -11,6 +11,124 @@ const _TEX_W = 512, _TEX_H = 256;
 let _texCanvas = null;
 let _perm = new Uint8Array(512);
 
+// ── Shuttles (decorative, top station) ───────────────────────────────────────
+let _shuttles     = [];
+let _shuttleTimer = 4;  // seconds until first spawn
+
+// Fixed approach/depart directions (angle = direction the shuttle travels FROM,
+// so spawn point is stationPos + direction * dist).
+const _SHUTTLE_ANGLES = [
+  -Math.PI * 0.50,  // straight above
+  -Math.PI * 0.25,  // upper-right
+   Math.PI * 0.00,  // right
+   Math.PI * 0.75,  // upper-left
+   Math.PI * 1.00,  // left
+];
+
+function _spawnShuttle(sx, sy) {
+  const ai     = Math.floor(Math.random() * _SHUTTLE_ANGLES.length);
+  const angle  = _SHUTTLE_ANGLES[ai];
+  const dist   = 220 + Math.random() * 80;
+  const speed  = 38 + Math.random() * 22;
+
+  // Spawn off-screen in `angle` direction; fly toward station
+  const x  = sx + Math.cos(angle) * dist;
+  const y  = sy + Math.sin(angle) * dist;
+  const vx = -Math.cos(angle) * speed;
+  const vy = -Math.sin(angle) * speed;
+
+  // Pick a distinct depart angle
+  const others = _SHUTTLE_ANGLES.filter((_, i) => i !== ai);
+  const di     = Math.floor(Math.random() * others.length);
+
+  _shuttles.push({ x, y, vx, vy, state: 'approach', dockTimer: 0,
+                   departAngle: others[di], sx, sy });
+}
+
+function _tickShuttles(dt) {
+  const topSt  = CONFIG.STATIONS[CONFIG.STATIONS.length - 1];
+  const sx     = getCableX();
+  const sy     = altToY(topSt.alt);
+
+  _shuttleTimer -= dt;
+  if (_shuttleTimer <= 0 && _shuttles.length < 3) {
+    _spawnShuttle(sx, sy);
+    _shuttleTimer = 9 + Math.random() * 8;
+  }
+
+  for (let i = _shuttles.length - 1; i >= 0; i--) {
+    const s = _shuttles[i];
+    s.sx = sx; s.sy = sy;  // update in case canvas resized
+
+    if (s.state === 'approach') {
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      const dx = sx - s.x, dy = sy - s.y;
+      if (dx * dx + dy * dy < 6 * 6) {
+        s.x = sx; s.y = sy;
+        s.state     = 'docked';
+        s.dockTimer = 2.5 + Math.random() * 3.5;
+      }
+    } else if (s.state === 'docked') {
+      s.dockTimer -= dt;
+      if (s.dockTimer <= 0) {
+        const a  = s.departAngle;
+        const sp = 38 + Math.random() * 22;
+        s.vx = Math.cos(a) * sp;
+        s.vy = Math.sin(a) * sp;
+        s.state = 'depart';
+      }
+    } else {
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      const dx = s.x - sx, dy = s.y - sy;
+      if (dx * dx + dy * dy > 350 * 350) _shuttles.splice(i, 1);
+    }
+  }
+}
+
+function _drawShuttles(ctx) {
+  for (const s of _shuttles) {
+    ctx.save();
+    ctx.translate(s.x, s.y);
+
+    const moving = s.state !== 'docked';
+    const facingAngle = moving ? Math.atan2(s.vy, s.vx) : Math.atan2(-s.vy || 0, -s.vx || 1);
+    ctx.rotate(facingAngle);
+
+    // Thruster exhaust
+    if (moving) {
+      ctx.shadowBlur  = 5;
+      ctx.shadowColor = '#f84';
+      ctx.fillStyle   = '#f84';
+      ctx.fillRect(-8, -1, 3, 2);
+      ctx.shadowBlur  = 0;
+    }
+
+    // Hull
+    ctx.fillStyle = '#1e3d6e';
+    ctx.fillRect(-5, -3, 12, 6);
+
+    // Cockpit stripe
+    ctx.fillStyle = '#7bcff5';
+    ctx.fillRect(5, -2, 3, 4);
+
+    // Wing fins
+    ctx.fillStyle = '#2d5a96';
+    ctx.fillRect(-4, -5, 7, 2);
+    ctx.fillRect(-4,  3, 7, 2);
+
+    // Running lights (tiny blink using _time)
+    const blink = Math.sin(_time * 4) > 0;
+    ctx.fillStyle = blink ? '#f00' : '#600';
+    ctx.fillRect(-5, -3, 2, 2);
+    ctx.fillStyle = blink ? '#0f0' : '#060';
+    ctx.fillRect(-5,  1, 2, 2);
+
+    ctx.restore();
+  }
+}
+
 // Zoom (vertical only — horizontal pivot stays fixed at cable X)
 let _zoom = 1.0, _targetZoom = 1.0;
 let _zoomCY = 0;
@@ -203,8 +321,10 @@ function renderFrame(dt) {
   ctx.translate(cableX, _zoomCY);
   ctx.scale(_zoom, _zoom);
   ctx.translate(-cableX, -_zoomCY);
+  _tickShuttles(dt);
   _drawCable(ctx, W, H, s.events);
   _drawStations(ctx, s.cabin);
+  _drawShuttles(ctx);
   _drawParticles(ctx, s.particles, dt);
   _drawCabin(ctx, s.cabin, s.events);
   ctx.restore();
@@ -414,50 +534,170 @@ function _drawCable(ctx, W, H, events) {
 
 // ── Stations ──────────────────────────────────────────────────────────────────
 function _drawStations(ctx, cabin) {
-  const bW = CONFIG.STATION_BOX_W;
-  const bH = CONFIG.STATION_BOX_H;
   const cx = getCableX();
 
   for (const st of CONFIG.STATIONS) {
-    const y  = altToY(st.alt);
-    const bx = cx - bW / 2;
-    const by = y  - bH / 2;
-
+    const y         = altToY(st.alt);
     const atStation = Math.abs(cabin.altitude - st.alt) < 0.012;
+    const isDest    = cabin.destination === st.id;
+    const col       = atStation ? '#0cf' : isDest ? '#ff0' : '#2a7aac';
+    const fill      = atStation ? '#0a3a5a' : '#060e1a';
 
-    // Box background
-    ctx.fillStyle = atStation ? '#0a2a4a' : '#060e1a';
-    ctx.fillRect(bx, by, bW, bH);
-
-    // Box border (highlight if cabin here or headed here)
-    const isDestination = cabin.destination === st.id;
-    ctx.strokeStyle = atStation ? '#0cf' : isDestination ? '#ff0' : '#2a5a8c';
-    ctx.lineWidth   = atStation ? 2 : 1;
-    ctx.strokeRect(bx, by, bW, bH);
-
-    // Glow when active
-    if (atStation) {
-      ctx.save();
-      ctx.shadowBlur  = 10;
-      ctx.shadowColor = '#0cf';
-      ctx.strokeStyle = '#0cf';
-      ctx.lineWidth   = 1;
-      ctx.strokeRect(bx, by, bW, bH);
-      ctx.restore();
+    ctx.save();
+    let labelX;
+    if (st.id === 'earth') {
+      _drawStPyramid(ctx, cx, y, col, fill, atStation);
+      labelX = cx - 34;
+    } else if (st.id === 'counterweight') {
+      _drawStRings(ctx, cx, y, col, fill, atStation, [22, 40, 60]);
+      labelX = cx - 66;
+    } else {
+      _drawStRings(ctx, cx, y, col, fill, atStation, [14, 26]);
+      labelX = cx - 32;
     }
 
-    // Label + altitude, right-aligned to the left of the box
-    ctx.textAlign = 'right';
-    ctx.fillStyle = atStation ? '#0ff' : '#6af';
-    ctx.font      = '8px Courier New';
-    ctx.fillText(st.label, bx - 4, y - 2);
-
-    ctx.fillStyle = '#336';
-    ctx.font      = '7px Courier New';
-    ctx.fillText(st.km >= 1000 ? Math.round(st.km / 100) / 10 + 'k km' : st.km + ' km', bx - 4, y + 7);
+    ctx.shadowBlur  = 0;
+    ctx.globalAlpha = 1;
+    ctx.textAlign   = 'right';
+    ctx.fillStyle   = atStation ? '#0ff' : '#6af';
+    ctx.font        = '8px Courier New';
+    ctx.fillText(st.label, labelX, y - 2);
+    ctx.fillStyle   = '#336';
+    ctx.font        = '7px Courier New';
+    ctx.fillText(st.km >= 1000 ? Math.round(st.km / 100) / 10 + 'k km' : st.km + ' km', labelX, y + 7);
+    ctx.restore();
   }
 
   ctx.textAlign = 'left';
+}
+
+function _drawStPyramid(ctx, cx, y, col, fill, atStation) {
+  const H = 46, HW = 28;
+
+  ctx.shadowBlur  = atStation ? 18 : 8;
+  ctx.shadowColor = col;
+
+  // Main triangle
+  ctx.fillStyle = fill;
+  ctx.beginPath();
+  ctx.moveTo(cx,        y);
+  ctx.lineTo(cx - HW,   y + H);
+  ctx.lineTo(cx + HW,   y + H);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = col;
+  ctx.lineWidth   = 1;
+  ctx.stroke();
+
+  // Etched tier lines
+  ctx.shadowBlur = 0;
+  for (let i = 1; i <= 3; i++) {
+    const t  = i / 4;
+    const ly = y + H * t;
+    const lw = HW * t;
+    ctx.strokeStyle = col + '66';
+    ctx.beginPath();
+    ctx.moveTo(cx - lw, ly);
+    ctx.lineTo(cx + lw, ly);
+    ctx.stroke();
+  }
+
+  // Window dots (two per tier)
+  ctx.fillStyle = col;
+  for (let i = 1; i <= 3; i++) {
+    const t  = i / 4 + 0.06;
+    const wy = y + H * t - 1;
+    const wx = HW * t * 0.55;
+    ctx.fillRect(cx - wx - 1, wy, 2, 2);
+    ctx.fillRect(cx + wx - 1, wy, 2, 2);
+  }
+
+  // Glowing apex
+  ctx.shadowBlur  = 10;
+  ctx.shadowColor = col;
+  ctx.fillStyle   = col;
+  ctx.fillRect(cx - 2, y - 2, 4, 4);
+}
+
+// Project a point on a tilted ring (rotating around the cable Y-axis) to screen coords.
+// inc  = inclination from horizontal (radians)
+// rot  = current rotation angle around Y (radians)
+// alpha = angle around the ring in ring-local frame
+// Elevation factor 0.32 ≈ sin(18.7°) — the viewer's angle above horizontal.
+function _ringPt(cx, cy, rx, inc, rot, alpha) {
+  const x3 = rx * Math.cos(alpha);
+  const y3 = rx * Math.sin(alpha) * Math.sin(inc);
+  const z3 = rx * Math.sin(alpha) * Math.cos(inc);
+  const x4 = x3 * Math.cos(rot) + z3 * Math.sin(rot);
+  const y4 = y3;
+  const z4 = -x3 * Math.sin(rot) + z3 * Math.cos(rot);
+  return { x: cx + x4, y: cy - y4 + z4 * 0.32, z: z4 };
+}
+
+function _drawStRings(ctx, cx, y, col, fill, atStation, radii) {
+  const N = 24;
+  // Inclination from horizontal and spin speed per ring index (inner → outer).
+  const INC   = [0.30, 0.46, 0.60];
+  const SPEED = [0.30, 0.22, 0.15];
+
+  ctx.shadowBlur  = atStation ? 14 : 5;
+  ctx.shadowColor = col;
+
+  // Draw outermost → innermost so inner rings appear in front.
+  for (let i = radii.length - 1; i >= 0; i--) {
+    const rx     = radii[i];
+    const inc    = INC[Math.min(i, INC.length - 1)];
+    const rot    = _time * SPEED[Math.min(i, SPEED.length - 1)];
+    const bAlpha = 0.45 + 0.55 * (i / (radii.length - 1));
+    // Ring angle where z=0: the front/back boundary.
+    // Derived from z4=0: cos(α)sin(rot) = sin(α)cos(inc)cos(rot)
+    const a0 = Math.atan2(Math.sin(rot), Math.cos(inc) * Math.cos(rot));
+
+    ctx.lineWidth  = (i === radii.length - 1) ? 1.5 : 1;
+    ctx.shadowBlur = atStation ? 14 : 5;
+
+    // Back arc — a0+π to a0+2π (dim)
+    ctx.globalAlpha = bAlpha;
+    ctx.strokeStyle = col + '44';
+    ctx.beginPath();
+    for (let j = 0; j <= N; j++) {
+      const p = _ringPt(cx, y, rx, inc, rot, a0 + Math.PI + (j / N) * Math.PI);
+      j === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+
+    // Front arc — a0 to a0+π (bright)
+    ctx.strokeStyle = col;
+    ctx.beginPath();
+    for (let j = 0; j <= N; j++) {
+      const p = _ringPt(cx, y, rx, inc, rot, a0 + (j / N) * Math.PI);
+      j === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+
+    // 4 spokes attached to ring structure — fade on back face
+    ctx.lineWidth  = 1;
+    ctx.shadowBlur = 0;
+    for (let s = 0; s < 4; s++) {
+      const p = _ringPt(cx, y, rx, inc, rot, s * Math.PI / 2);
+      ctx.globalAlpha = (p.z >= 0 ? 0.35 : 0.12) * bAlpha;
+      ctx.strokeStyle = col;
+      ctx.beginPath();
+      ctx.moveTo(cx, y);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    }
+  }
+
+  // Hub
+  ctx.globalAlpha = 1;
+  ctx.shadowBlur  = atStation ? 8 : 3;
+  ctx.shadowColor = col;
+  ctx.fillStyle   = fill;
+  ctx.strokeStyle = col;
+  ctx.lineWidth   = 1;
+  ctx.fillRect(cx - 4, y - 4, 8, 8);
+  ctx.strokeRect(cx - 4, y - 4, 8, 8);
 }
 
 // ── Cabin ─────────────────────────────────────────────────────────────────────

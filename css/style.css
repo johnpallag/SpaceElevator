@@ -17,6 +17,7 @@ body {
   width: 100vw;
   height: 100vh;
   image-rendering: pixelated;
+  touch-action: none;
 }
 
 /* ── Sidebar ─────────────────────────────────────────── */
@@ -241,6 +242,26 @@ body {
 .log-entry.error { color: #f44; }
 .log-entry.good  { color: #0f8; }
 
+/* ── Panel content wrapper (transparent on desktop) ─────── */
+#panel-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Bottom bar wrapper ──────────────────────────────────── */
+#bottom-bar {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+#panel-toggle-btn {
+  display: none;
+}
+
 /* ── Track button ────────────────────────────────────── */
 #track-btn {
   margin: 8px 8px 0;
@@ -276,6 +297,103 @@ body {
 #upgrade-btn:hover {
   background: #1a2800;
   border-color: #ff0;
+}
+
+/* ── Mobile — portrait (≤520px wide) ────────────────────── */
+@media (max-width: 520px) {
+  #sidebar {
+    top: auto;
+    bottom: 0;
+    width: 100%;
+    height: auto;
+    border-right: none;
+    border-top: 2px solid #1a3a5c;
+    overflow: visible;
+  }
+
+  /* Compact 2-column topbar: bars on left, stats on right */
+  #topbar {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "pwr-bar  credits"
+      "int-bar  altitude";
+    column-gap: 10px;
+    row-gap: 3px;
+    padding: 6px 10px;
+    border-bottom: 1px solid #1a3a5c;
+  }
+
+  #topbar .bar-row:first-child  { grid-area: pwr-bar;  margin-bottom: 0; }
+  #topbar .bar-row:nth-child(2) { grid-area: int-bar;  margin-bottom: 0; }
+  #credits-display  { grid-area: credits;  margin-top: 0; align-self: center; }
+  #altitude-display { grid-area: altitude; margin-top: 0; align-self: center; }
+
+  /* Collapsible info panel — hidden until toggled */
+  #panel-content {
+    display: none;
+    flex: 0 1 auto;
+    max-height: 50vh;
+    overflow-y: auto;
+    border-top: 1px solid #1a3a5c;
+  }
+
+  #panel-content.expanded {
+    display: flex;
+  }
+
+  /* Persistent bottom action bar */
+  #bottom-bar {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px 10px;
+    border-top: 1px solid #1a3a5c;
+  }
+
+  #panel-toggle-btn {
+    display: block;
+    padding: 6px 8px;
+    font-family: 'Courier New', monospace;
+    font-size: 10px;
+    color: #6af;
+    background: #060e1a;
+    border: 1px solid #1a3a5c;
+    cursor: pointer;
+    letter-spacing: 1px;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  #track-btn,
+  #upgrade-btn {
+    flex: 1;
+    margin: 0;
+    padding: 7px 4px;
+    font-size: 10px;
+    letter-spacing: 0;
+  }
+}
+
+/* ── Mobile — landscape short screen (≤500px tall) ──────── */
+@media (max-height: 500px) and (orientation: landscape) {
+  #sidebar {
+    overflow-y: auto;
+  }
+
+  #event-log {
+    height: 55px;
+  }
+
+  /* Keep buttons pinned to the bottom of the scrollable sidebar */
+  #bottom-bar {
+    position: sticky;
+    bottom: 0;
+    background: rgba(4, 8, 20, 0.98);
+    z-index: 1;
+    border-top: 1px solid #1a3a5c;
+    padding-top: 4px;
+  }
 }
 
 /* ── Upgrade Modal ───────────────────────────────────── */

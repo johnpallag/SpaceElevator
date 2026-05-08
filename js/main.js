@@ -1,10 +1,17 @@
 'use strict';
 
+function _updateLayout() {
+  const portrait = window.innerWidth <= 520;
+  CONFIG.SIDEBAR_WIDTH        = portrait ? 0   : 220;
+  CONFIG.CABLE_Y_BOTTOM_OFFSET = portrait ? 160 : 100;
+}
+
 window.addEventListener('load', function () {
   const canvas  = document.getElementById('gameCanvas');
   canvas.width  = window.innerWidth;
   canvas.height = window.innerHeight;
 
+  _updateLayout();
   renderInit(canvas);
   uiInit(canvas);
   uiRenderSidebar();
@@ -34,6 +41,7 @@ window.addEventListener('load', function () {
   window.addEventListener('resize', function () {
     canvas.width  = window.innerWidth;
     canvas.height = window.innerHeight;
+    _updateLayout();
     renderInit(canvas);
   });
 });
