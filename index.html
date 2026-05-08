@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SPACE ELEVATOR</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+
+  <div id="sidebar">
+    <div id="topbar">
+      <div class="bar-row">
+        <span class="bar-label">PWR</span>
+        <div class="bar-track"><div id="power-bar-fill" class="bar-fill power"></div></div>
+        <span id="power-pct" class="bar-pct">100%</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">INT</span>
+        <div class="bar-track"><div id="integrity-bar-fill" class="bar-fill integrity"></div></div>
+        <span id="integrity-pct" class="bar-pct">100%</span>
+      </div>
+      <div id="credits-display">CR: 500</div>
+      <div id="altitude-display">ALT: 0 km</div>
+    </div>
+
+    <div id="active-deliveries">
+      <div class="section-title">-- ACTIVE --</div>
+      <div class="empty-msg">No active deliveries</div>
+    </div>
+
+    <div id="request-queue">
+      <div class="section-title">-- REQUESTS --</div>
+      <div class="empty-msg">Awaiting requests...</div>
+    </div>
+
+    <div id="event-log">
+      <div class="section-title">-- LOG --</div>
+    </div>
+
+    <button id="upgrade-btn" onclick="uiShowUpgrades()">[ UPGRADES ]</button>
+  </div>
+
+  <div id="upgrade-modal" class="hidden">
+    <div id="upgrade-panel">
+      <div class="modal-title">UPGRADES</div>
+      <div id="upgrade-list"></div>
+      <button onclick="uiHideUpgrades()">[ CLOSE ]</button>
+    </div>
+  </div>
+
+  <div id="gameover-screen" class="hidden">
+    <div id="gameover-panel">
+      <div id="gameover-title">GAME OVER</div>
+      <div id="gameover-reason" class="reason"></div>
+      <div id="gameover-score" class="score"></div>
+      <button onclick="location.reload()">[ RESTART ]</button>
+    </div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/state.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/physics.js"></script>
+  <script src="js/requests.js"></script>
+  <script src="js/events.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
