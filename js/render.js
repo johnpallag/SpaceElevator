@@ -4,7 +4,82 @@
 let _ctx, _canvas;
 let _cableYTop, _cableYBottom;
 let _stars = [];
-let _time = 0; // running seconds for animations
+let _time = 0;
+
+// Planet texture (generated once at startup)
+const _TEX_W = 512, _TEX_H = 256;
+let _texCanvas = null;
+let _perm = new Uint8Array(512);
+
+// ── Value noise ───────────────────────────────────────────────────────────────
+function _initNoise() {
+  const p = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) p[i] = i;
+  for (let i = 255; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = p[i]; p[i] = p[j]; p[j] = t;
+  }
+  for (let i = 0; i < 256; i++) _perm[i] = _perm[i + 256] = p[i];
+}
+
+function _vnoise(x, y) {
+  const xi = Math.floor(x) & 255, yi = Math.floor(y) & 255;
+  const xf = x - Math.floor(x),   yf = y - Math.floor(y);
+  const u  = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const aa = _perm[(_perm[xi    ] + yi    ) & 255];
+  const ba = _perm[(_perm[xi + 1] + yi    ) & 255];
+  const ab = _perm[(_perm[xi    ] + yi + 1) & 255];
+  const bb = _perm[(_perm[xi + 1] + yi + 1) & 255];
+  return (aa*(1-u)*(1-v) + ba*u*(1-v) + ab*(1-u)*v + bb*u*v) / 255;
+}
+
+function _fbm(x, y, oct) {
+  let v = 0, amp = 0.5, f = 1, tot = 0;
+  for (let i = 0; i < oct; i++) {
+    v += _vnoise(x * f, y * f) * amp;
+    tot += amp; amp *= 0.5; f *= 2.1;
+  }
+  return v / tot;
+}
+
+// ── Planet texture generation (once at startup) ───────────────────────────────
+function _generatePlanetTexture() {
+  _texCanvas = document.createElement('canvas');
+  _texCanvas.width = _TEX_W; _texCanvas.height = _TEX_H;
+  const tc  = _texCanvas.getContext('2d');
+  const img = tc.createImageData(_TEX_W, _TEX_H);
+  const d   = img.data;
+
+  for (let ty = 0; ty < _TEX_H; ty++) {
+    for (let tx = 0; tx < _TEX_W; tx++) {
+      const nx = tx / _TEX_W, ny = ty / _TEX_H;
+
+      // Continent mask (large blobs, offset so seam at edge is oceanic)
+      const cont = _fbm(nx * 2.8 + 7.3, ny * 2.8 + 3.1, 4);
+      // Fine terrain detail
+      const det  = _fbm(nx * 9.0 + 1.7, ny * 9.0 + 5.5, 4) * 0.28;
+      let h = Math.pow(cont, 0.85) * 0.72 + det;
+
+      // Polar ice caps: blend to white near top/bottom of texture
+      const latFrac = Math.abs(ny - 0.5) * 2;        // 0=equator, 1=pole
+      const ice     = Math.max(0, (latFrac - 0.72) * 3.6);
+      h = h * (1 - ice) + ice;
+
+      let r, g, b;
+      if      (h < 0.38) { r=0;              g=Math.floor(30+h*105); b=Math.floor(75+h*125); }  // deep ocean
+      else if (h < 0.46) { r=0;              g=Math.floor(70+h*55);  b=Math.floor(125+h*62); }  // shallow
+      else if (h < 0.51) { const t=(h-0.46)/0.05; r=Math.floor(155+t*35); g=Math.floor(140+t*20); b=Math.floor(85+t*10); } // sand
+      else if (h < 0.67) { const t=(h-0.51)/0.16; r=Math.floor(26+t*20);  g=Math.floor(85+t*44); b=Math.floor(18+t*12); } // lowland
+      else if (h < 0.80) { const t=(h-0.67)/0.13; r=Math.floor(46+t*38);  g=Math.floor(72+t*24); b=Math.floor(28+t*22); } // highland
+      else if (h < 0.91) { const t=(h-0.80)/0.11; r=Math.floor(84+t*72);  g=Math.floor(77+t*65); b=Math.floor(62+t*54); } // rocky
+      else               { const t=(h-0.91)/0.09;  r=Math.floor(208+t*47); g=Math.floor(218+t*37); b=Math.floor(230+t*25); } // snow/ice
+
+      const i = (ty * _TEX_W + tx) * 4;
+      d[i]=r; d[i+1]=g; d[i+2]=b; d[i+3]=255;
+    }
+  }
+  tc.putImageData(img, 0, 0);
+}
 
 // ── Coordinate helpers (exposed globally) ────────────────────────────────────
 window.altToY = function(alt) {
@@ -28,16 +103,22 @@ function renderInit(canvas) {
   _cableYTop    = CONFIG.CABLE_Y_TOP_OFFSET;
   _cableYBottom = canvas.height - CONFIG.CABLE_Y_BOTTOM_OFFSET;
 
-  // Pre-generate stars
+  // Stars (re-generated on resize; cheap)
   _stars = [];
   for (let i = 0; i < CONFIG.STAR_COUNT; i++) {
     _stars.push({
-      x: Math.random(),           // 0–1 of canvas width
-      y: Math.random() * 0.78,   // top 78% of canvas height
-      r: Math.random() < 0.08 ? 1.5 : 1,
-      base: 0.35 + Math.random() * 0.65,
+      x:     Math.random(),
+      y:     Math.random() * 0.78,
+      r:     Math.random() < 0.08 ? 1.5 : 1,
+      base:  0.35 + Math.random() * 0.65,
       phase: Math.random() * Math.PI * 2,
     });
+  }
+
+  // Planet texture: generate only once (seeded noise → stable map)
+  if (!_texCanvas) {
+    _initNoise();
+    _generatePlanetTexture();
   }
 }
 
@@ -75,137 +156,134 @@ function _drawBackground(ctx, W, H, dayTime, cabinAlt) {
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, W, H);
 
-  // Stars — fade out toward bottom where atmosphere thickens
-  const parallax = (cabinAlt - 0.3) * 30;
+  // Stars — slowly rotate around the upper sky; fade near atmosphere
+  const starAngle = _time * 0.000055 * Math.PI * 2; // full rotation ~5 hours
+  const rotCX = W * 0.5, rotCY = H * 0.32;
+  ctx.save();
+  ctx.translate(rotCX, rotCY);
+  ctx.rotate(starAngle);
+  ctx.translate(-rotCX, -rotCY);
   for (let i = 0; i < _stars.length; i++) {
     const st = _stars[i];
-    const twinkle  = st.base * (0.75 + 0.25 * Math.sin(_time * 2.5 + st.phase));
-    const skyFade  = 1 - Math.max(0, (st.y - 0.55) / 0.45);  // fade below 55% of canvas
+    const twinkle   = st.base * (0.75 + 0.25 * Math.sin(_time * 2.5 + st.phase));
+    const skyFade   = 1 - Math.max(0, (st.y - 0.55) / 0.45);
     const nightFade = Math.max(0.08, 1 - day * 0.85);
     ctx.globalAlpha = Math.max(0, twinkle * skyFade * nightFade);
     ctx.fillStyle   = '#fff';
-    const sx = ((st.x * W + parallax) % W + W) % W;
-    ctx.fillRect(Math.round(sx), Math.round(st.y * H), st.r, st.r);
+    ctx.fillRect(Math.round(st.x * W), Math.round(st.y * H), st.r, st.r);
   }
   ctx.globalAlpha = 1;
+  ctx.restore();
 
   _drawEarth(ctx, W, H, day);
 }
 
 function _drawEarth(ctx, W, H, day) {
-  // Geometry: large circle centred below the canvas.
-  // arcCY is chosen so the top of the arc sits at H * (1 - visibleFrac).
-  const visibleFrac = 0.22;          // fraction of screen height showing Earth surface
-  const arcR  = W * 1.30;            // large radius → gentle curvature
+  // ── Geometry ──────────────────────────────────────────────────────────────
+  // arcCY is positioned so the top of the Earth disc sits at H*(1-visibleFrac)
+  const visibleFrac = 0.22;
+  const arcR  = W * 1.30;
   const arcCX = W * 0.50;
-  const arcCY = H * (1 - visibleFrac) + arcR;   // arcTop = H*(1-visibleFrac) ✓
+  const arcCY = H * (1 - visibleFrac) + arcR;
+  const earthTop = H * (1 - visibleFrac);
+  const stripH   = H - earthTop;
 
-  const earthTop = H * (1 - visibleFrac);       // canvas Y where Earth surface begins
-
-  // ── Layered atmosphere arcs (drawn before clipping, behind surface) ───────
-  // Each arc is a wide stroke ring just outside the Earth disc.
-  const atmoLayers = [
-    { dr: 52, lw: 38, alpha: 0.045 + day * 0.045, h: 200 },
-    { dr: 32, lw: 24, alpha: 0.08  + day * 0.07,  h: 205 },
-    { dr: 17, lw: 14, alpha: 0.13  + day * 0.10,  h: 210 },
-    { dr:  8, lw:  9, alpha: 0.22  + day * 0.16,  h: 215 },
-    { dr:  3, lw:  5, alpha: 0.38  + day * 0.22,  h: 195 },
-    { dr:  1, lw:  2, alpha: 0.65  + day * 0.20,  h: 185 },
-  ];
+  // ── Layered atmosphere arcs ───────────────────────────────────────────────
   ctx.save();
+  const atmoLayers = [
+    { dr: 52, lw: 38, alpha: 0.04  + day * 0.04, hue: 200 },
+    { dr: 32, lw: 24, alpha: 0.08  + day * 0.07, hue: 205 },
+    { dr: 17, lw: 14, alpha: 0.13  + day * 0.10, hue: 210 },
+    { dr:  8, lw:  9, alpha: 0.22  + day * 0.16, hue: 215 },
+    { dr:  3, lw:  5, alpha: 0.38  + day * 0.22, hue: 195 },
+    { dr:  1, lw:  2, alpha: 0.62  + day * 0.20, hue: 185 },
+  ];
   for (const L of atmoLayers) {
     ctx.beginPath();
     ctx.arc(arcCX, arcCY, arcR + L.dr, 0, Math.PI * 2);
-    ctx.strokeStyle = `hsla(${L.h},90%,${60 + day * 25}%,${L.alpha})`;
+    ctx.strokeStyle = `hsla(${L.hue},90%,${60 + day*25}%,${L.alpha})`;
     ctx.lineWidth   = L.lw;
     ctx.stroke();
   }
   ctx.restore();
 
-  // ── Earth surface (clipped to disc) ───────────────────────────────────────
+  // ── Surface: procedural texture via per-scanline drawImage ────────────────
   ctx.save();
   ctx.beginPath();
   ctx.arc(arcCX, arcCY, arcR, 0, Math.PI * 2);
   ctx.clip();
 
-  // Ocean — linear gradient within the visible strip
-  const oGrad = ctx.createLinearGradient(0, earthTop, 0, H);
-  oGrad.addColorStop(0.0, `hsl(210,${70 + day*15}%,${22 + day*20}%)`);  // horizon
-  oGrad.addColorStop(0.5, `hsl(215,${75 + day*12}%,${16 + day*15}%)`);
-  oGrad.addColorStop(1.0, `hsl(220,${80 + day*10}%,${10 + day*10}%)`);  // deep
-  ctx.fillStyle = oGrad;
-  ctx.fillRect(0, earthTop, W, H - earthTop + 2);
+  // Smoothing on for texture stretching, then restore
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'low';
 
-  // Night-side darkening
-  if (day < 0.7) {
-    ctx.fillStyle = `rgba(0,0,18,${(0.7 - day) * 0.72})`;
-    ctx.fillRect(0, earthTop, W, H - earthTop + 2);
+  // Earth surface is fixed — no longitudinal rotation
+  for (let cy = Math.ceil(earthTop); cy < H; cy++) {
+    const dyUp = arcCY - cy;
+    const chord = Math.sqrt(Math.max(0, arcR * arcR - dyUp * dyUp));
+    if (chord < 1) continue;
+
+    const x0 = arcCX - chord;
+    const cw = chord * 2;
+
+    // Equirectangular latitude → texture row
+    const sinLat = Math.min(1, dyUp / arcR);
+    const ty = Math.max(0, Math.min(_TEX_H - 1,
+      Math.floor((0.5 - Math.asin(sinLat) / Math.PI) * _TEX_H * 2.8)
+    ));
+
+    ctx.drawImage(_texCanvas, 0, ty, _TEX_W, 1, x0, cy, cw, 1);
   }
 
-  // Land patches — placed in the visible strip using canvas coords
-  const landG = Math.floor(72 + day * 52);
-  const landR = Math.floor(22 + day * 22);
-  // [cx_frac, cy_frac_of_visibleStrip, radius_px]
-  const patches = [
-    [0.10, 0.55, W * 0.055],
-    [0.24, 0.35, W * 0.040],
-    [0.38, 0.70, W * 0.060],
-    [0.52, 0.42, W * 0.038],
-    [0.63, 0.68, W * 0.050],
-    [0.77, 0.38, W * 0.042],
-    [0.88, 0.60, W * 0.035],
-    [0.18, 0.82, W * 0.030],
-  ];
-  const stripH = H - earthTop;
-  for (const [fx, fy, r] of patches) {
-    ctx.fillStyle = `rgb(${landR},${landG},${Math.floor(landG * 0.28)})`;
-    ctx.beginPath();
-    ctx.arc(fx * W, earthTop + fy * stripH, r, 0, Math.PI * 2);
-    ctx.fill();
-    // Lighter highlight edge (sun-lit side)
-    if (day > 0.3) {
-      ctx.fillStyle = `rgba(${landR+30},${landG+30},${Math.floor(landG*0.28+20)},${day * 0.4})`;
-      ctx.beginPath();
-      ctx.arc(fx * W - r * 0.2, earthTop + fy * stripH - r * 0.2, r * 0.7, 0, Math.PI * 2);
-      ctx.fill();
-    }
+  ctx.imageSmoothingEnabled = false;
+
+  // ── Night-side darkening ──────────────────────────────────────────────────
+  if (day < 0.85) {
+    const alpha = (0.85 - day) * 0.75;
+    ctx.fillStyle = `rgba(0,0,15,${alpha})`;
+    ctx.fillRect(0, earthTop, W, stripH + 2);
   }
 
-  // Cloud wisps — soft white ellipses
-  ctx.fillStyle = `rgba(255,255,255,${0.07 + day * 0.07})`;
-  const clouds = [
-    [0.15, 0.25, W*0.09, W*0.022],
-    [0.42, 0.52, W*0.11, W*0.020],
-    [0.65, 0.38, W*0.08, W*0.018],
-    [0.30, 0.78, W*0.10, W*0.021],
-    [0.80, 0.62, W*0.07, W*0.019],
-  ];
-  for (const [fx, fy, rx, ry] of clouds) {
-    ctx.beginPath();
-    ctx.ellipse(fx * W, earthTop + fy * stripH, rx, ry, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // City lights on night side
-  if (day < 0.45) {
-    const lightAlpha = (0.45 - day) * 0.7;
-    // Deterministic "random" positions via golden-ratio spacing
-    for (let i = 0; i < 16; i++) {
+  // ── City lights (visible on dark side) ────────────────────────────────────
+  if (day < 0.40) {
+    const la = (0.40 - day) * 0.9;
+    for (let i = 0; i < 20; i++) {
       const lx = ((i * 0.6180339887) % 1) * W;
       const ly = earthTop + ((i * 0.3819660113) % 1) * stripH;
-      ctx.fillStyle = `rgba(255,220,120,${lightAlpha * (0.4 + (i % 3) * 0.3)})`;
+      ctx.fillStyle = `rgba(255,215,100,${la * (0.35 + (i % 3) * 0.32)})`;
       ctx.fillRect(Math.round(lx), Math.round(ly), 2, 2);
     }
   }
 
-  ctx.restore();  // remove clip
+  // ── Cloud layer — drift slowly westward over time ─────────────────────────
+  const cloudRot = (_time * 4.5) % W;  // full traverse in ~5.5 min
+  const clouds = [
+    [0.12, 0.22, W*0.095, W*0.024],
+    [0.38, 0.50, W*0.115, W*0.022],
+    [0.58, 0.35, W*0.085, W*0.019],
+    [0.27, 0.75, W*0.100, W*0.023],
+    [0.72, 0.60, W*0.075, W*0.020],
+    [0.88, 0.30, W*0.068, W*0.018],
+    [0.50, 0.82, W*0.090, W*0.021],
+  ];
+  ctx.fillStyle = `rgba(255,255,255,${0.055 + day * 0.065})`;
+  for (const [fx, fy, rx, ry] of clouds) {
+    const cx2 = ((fx * W + cloudRot) % W + W) % W;
+    const cy2 = earthTop + fy * stripH;
+    ctx.beginPath();
+    ctx.ellipse(cx2, cy2, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (cx2 + rx > W) { ctx.beginPath(); ctx.ellipse(cx2 - W, cy2, rx, ry, 0, 0, Math.PI * 2); ctx.fill(); }
+    if (cx2 - rx < 0) { ctx.beginPath(); ctx.ellipse(cx2 + W, cy2, rx, ry, 0, 0, Math.PI * 2); ctx.fill(); }
+  }
 
-  // ── Bright limb / horizon line ────────────────────────────────────────────
-  // A thin bright arc right at the Earth edge to separate it from the sky
+  ctx.restore();
+
+  // ── Horizon limb line ─────────────────────────────────────────────────────
   ctx.save();
   ctx.beginPath();
   ctx.arc(arcCX, arcCY, arcR + 0.5, 0, Math.PI * 2);
-  ctx.strokeStyle = `rgba(120,200,255,${0.35 + day * 0.30})`;
+  ctx.strokeStyle = `rgba(130,210,255,${0.32 + day * 0.32})`;
   ctx.lineWidth   = 1.5;
   ctx.stroke();
   ctx.restore();
