@@ -2,6 +2,11 @@
 
 let _uiCanvas;
 
+// Drag-pan state
+let _dragStartY = null;
+let _dragLastY  = null;
+let _didDrag    = false;
+
 function uiInit(canvas) {
   _uiCanvas = canvas;
   canvas.addEventListener('click', _handleCanvasClick);
@@ -14,6 +19,31 @@ function uiInit(canvas) {
     renderSetZoomCenter(cx, cy);
     renderSetZoom(e.deltaY);
   }, { passive: false });
+
+  canvas.addEventListener('mousedown', function(e) {
+    _dragStartY = e.clientY;
+    _dragLastY  = e.clientY;
+    _didDrag    = false;
+  });
+
+  window.addEventListener('mousemove', function(e) {
+    if (_dragLastY === null) return;
+    if (Math.abs(e.clientY - _dragStartY) > 4) _didDrag = true;
+    if (_didDrag) {
+      const rect   = _uiCanvas.getBoundingClientRect();
+      const scaleY = _uiCanvas.height / rect.height;
+      renderPan((e.clientY - _dragLastY) * scaleY);
+      _uiCanvas.style.cursor = 'grabbing';
+    }
+    _dragLastY = e.clientY;
+  });
+
+  window.addEventListener('mouseup', function() {
+    if (_didDrag) _uiCanvas.style.cursor = 'default';
+    _dragLastY  = null;
+    _dragStartY = null;
+  });
+
   uiRenderSidebar();
 }
 
@@ -197,6 +227,7 @@ function uiToggleTracking() {
 
 // ── Canvas click handler ──────────────────────────────────────────────────────
 function _handleCanvasClick(e) {
+  if (_didDrag) { _didDrag = false; return; }
   if (STATE.gameOver) return;
 
   const rect     = _uiCanvas.getBoundingClientRect();

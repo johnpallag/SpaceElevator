@@ -13,16 +13,29 @@ let _perm = new Uint8Array(512);
 
 // Zoom (vertical only — horizontal pivot stays fixed at cable X)
 let _zoom = 1.0, _targetZoom = 1.0;
-let _zoomCY = 0, _zoomTargetCY = 0;
+let _zoomCY = 0;
+let _worldYAnchor = 0, _anchorScreenY = 0;  // world point pinned to screen Y during zoom
 let _tracking = true;
 
 function renderSetZoom(deltaY) {
   _targetZoom = Math.max(0.35, Math.min(5.0, _targetZoom * Math.pow(0.999, deltaY)));
 }
 
-window.renderSetZoomCenter = function(_x, y) {
-  _zoomTargetCY = y;
+window.renderSetZoomCenter = function(_x, cy) {
+  // Record the world Y currently under the cursor — this stays fixed as zoom animates.
+  _worldYAnchor = (cy - _zoomCY) / _zoom + _zoomCY;
+  _anchorScreenY = cy;
   _tracking = false;
+};
+
+window.renderPan = function(dy) {
+  if (_tracking) {
+    // Initialise anchor at current pivot so the scene doesn't jump on first pan.
+    _worldYAnchor  = _zoomCY;
+    _anchorScreenY = _zoomCY;
+    _tracking = false;
+  }
+  _anchorScreenY += dy;
 };
 
 window.renderToggleTracking = function() {
@@ -128,7 +141,8 @@ function renderInit(canvas) {
   _cableYTop    = CONFIG.CABLE_Y_TOP_OFFSET;
   _cableYBottom = canvas.height - CONFIG.CABLE_Y_BOTTOM_OFFSET;
 
-  _zoomCY = _zoomTargetCY = _cableYBottom;
+  _zoomCY = _cableYBottom;
+  _worldYAnchor = _anchorScreenY = _cableYBottom;
 
   // Stars (re-generated on resize; cheap)
   _stars = [];
@@ -164,11 +178,16 @@ function renderFrame(dt) {
   const cableX = getCableX();
   const cabinScreenY = altToY(s.cabin.altitude);
 
-  // If tracking, follow the cabin vertically
   if (_tracking) {
-    _zoomTargetCY = cabinScreenY;
+    // Follow cabin with smooth lerp
+    _zoomCY += (cabinScreenY - _zoomCY) * Math.min(1, dt * 9);
+  } else {
+    // Derive pivot analytically so _worldYAnchor stays at _anchorScreenY for any _zoom.
+    // Invariant: worldY * zoom + zoomCY * (1 - zoom) = anchorScreenY
+    if (Math.abs(_zoom - 1) > 1e-4) {
+      _zoomCY = (_anchorScreenY - _worldYAnchor * _zoom) / (1 - _zoom);
+    }
   }
-  _zoomCY += (_zoomTargetCY - _zoomCY) * Math.min(1, dt * 9);
 
   // Star parallax: zoom-centre offset from screen centre
   const parallaxY = (_zoomCY - H * 0.5) * (_zoom - 1);
@@ -427,16 +446,15 @@ function _drawStations(ctx, cabin) {
       ctx.restore();
     }
 
-    // Label
-    ctx.fillStyle  = atStation ? '#0ff' : '#6af';
-    ctx.font       = '8px Courier New';
-    ctx.textAlign  = 'center';
-    ctx.fillText(st.label, cx, by - 4);
+    // Label + altitude, right-aligned to the left of the box
+    ctx.textAlign = 'right';
+    ctx.fillStyle = atStation ? '#0ff' : '#6af';
+    ctx.font      = '8px Courier New';
+    ctx.fillText(st.label, bx - 4, y - 2);
 
-    // Altitude
     ctx.fillStyle = '#336';
     ctx.font      = '7px Courier New';
-    ctx.fillText(st.km >= 1000 ? Math.round(st.km / 100) / 10 + 'k km' : st.km + ' km', cx, by + bH + 9);
+    ctx.fillText(st.km >= 1000 ? Math.round(st.km / 100) / 10 + 'k km' : st.km + ' km', bx - 4, y + 7);
   }
 
   ctx.textAlign = 'left';
