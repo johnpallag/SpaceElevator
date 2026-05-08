@@ -6,6 +6,14 @@ function uiInit(canvas) {
   _uiCanvas = canvas;
   canvas.addEventListener('click', _handleCanvasClick);
   canvas.addEventListener('mousemove', _handleCanvasHover);
+  canvas.addEventListener('wheel', function(e) {
+    e.preventDefault();
+    const rect = _uiCanvas.getBoundingClientRect();
+    const cx = (e.clientX - rect.left) * (_uiCanvas.width  / rect.width);
+    const cy = (e.clientY - rect.top)  * (_uiCanvas.height / rect.height);
+    renderSetZoomCenter(cx, cy);
+    renderSetZoom(e.deltaY);
+  }, { passive: false });
   uiRenderSidebar();
 }
 
@@ -176,6 +184,17 @@ function uiBuyUpgrade(id) {
   uiRenderSidebar();
 }
 
+// ── Track button ──────────────────────────────────────────────────────────────
+function uiToggleTracking() {
+  const tracking = renderToggleTracking();
+  const btn = document.getElementById('track-btn');
+  if (btn) {
+    btn.textContent   = tracking ? '[ TRACK: ON ]' : '[ TRACK: OFF ]';
+    btn.style.color   = tracking ? '#0f8' : '#f80';
+    btn.style.borderColor = tracking ? '#0a8' : '#880';
+  }
+}
+
 // ── Canvas click handler ──────────────────────────────────────────────────────
 function _handleCanvasClick(e) {
   if (STATE.gameOver) return;
@@ -185,15 +204,15 @@ function _handleCanvasClick(e) {
   const clickY   = (e.clientY - rect.top)  * (_uiCanvas.height / rect.height);
   const cableX   = getCableX();
 
-  // Must click within ±50px of cable
-  if (Math.abs(clickX - cableX) > 50) return;
+  // Must click within ±50px of cable (scale threshold with zoom)
+  if (Math.abs(clickX - cableX) > 50 * Math.max(1, getZoom())) return;
 
-  const clickAlt = yToAlt(clickY);
+  const clickAlt = screenYToAlt(clickY);  // zoom-aware
   let nearest = null, nearestDist = Infinity;
 
   for (const st of CONFIG.STATIONS) {
     const dist = Math.abs(st.alt - clickAlt);
-    if (dist < nearestDist && dist < 0.1) {
+    if (dist < nearestDist && dist < 0.1 / Math.max(0.5, getZoom())) {
       nearest     = st;
       nearestDist = dist;
     }

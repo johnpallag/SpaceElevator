@@ -241,6 +241,24 @@ body {
 .log-entry.error { color: #f44; }
 .log-entry.good  { color: #0f8; }
 
+/* ── Track button ────────────────────────────────────── */
+#track-btn {
+  margin: 8px 8px 0;
+  padding: 6px;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: #0f8;
+  background: #001800;
+  border: 1px solid #0a8;
+  cursor: pointer;
+  letter-spacing: 1px;
+  flex-shrink: 0;
+}
+
+#track-btn:hover {
+  background: #002800;
+}
+
 /* ── Upgrade button ──────────────────────────────────── */
 #upgrade-btn {
   margin: 8px;

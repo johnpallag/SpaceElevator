@@ -11,6 +11,31 @@ const _TEX_W = 512, _TEX_H = 256;
 let _texCanvas = null;
 let _perm = new Uint8Array(512);
 
+// Zoom (vertical only — horizontal pivot stays fixed at cable X)
+let _zoom = 1.0, _targetZoom = 1.0;
+let _zoomCY = 0, _zoomTargetCY = 0;
+let _tracking = true;
+
+function renderSetZoom(deltaY) {
+  _targetZoom = Math.max(0.35, Math.min(5.0, _targetZoom * Math.pow(0.999, deltaY)));
+}
+
+window.renderSetZoomCenter = function(_x, y) {
+  _zoomTargetCY = y;
+  _tracking = false;
+};
+
+window.renderToggleTracking = function() {
+  _tracking = !_tracking;
+  return _tracking;
+};
+
+window.getZoom      = function() { return _zoom; };
+window.screenYToAlt = function(screenY) {
+  const worldY = (screenY - _zoomCY) / _zoom + _zoomCY;
+  return yToAlt(worldY);
+};
+
 // ── Value noise ───────────────────────────────────────────────────────────────
 function _initNoise() {
   const p = new Uint8Array(256);
@@ -91,7 +116,7 @@ window.yToAlt = function(y) {
 };
 
 window.getCableX = function() {
-  return _canvas.width * CONFIG.CABLE_X_RATIO;
+  return CONFIG.SIDEBAR_WIDTH + (_canvas.width - CONFIG.SIDEBAR_WIDTH) * 0.5;
 };
 
 // ── Init ─────────────────────────────────────────────────────────────────────
@@ -102,6 +127,8 @@ function renderInit(canvas) {
 
   _cableYTop    = CONFIG.CABLE_Y_TOP_OFFSET;
   _cableYBottom = canvas.height - CONFIG.CABLE_Y_BOTTOM_OFFSET;
+
+  _zoomCY = _zoomTargetCY = _cableYBottom;
 
   // Stars (re-generated on resize; cheap)
   _stars = [];
@@ -125,6 +152,8 @@ function renderInit(canvas) {
 // ── Master render call ────────────────────────────────────────────────────────
 function renderFrame(dt) {
   _time += dt;
+  _zoom += (_targetZoom - _zoom) * Math.min(1, dt * 9);
+
   const ctx = _ctx;
   const W = _canvas.width;
   const H = _canvas.height;
@@ -132,17 +161,42 @@ function renderFrame(dt) {
 
   ctx.clearRect(0, 0, W, H);
 
-  _drawBackground(ctx, W, H, s.dayTime, s.cabin.altitude);
+  const cableX = getCableX();
+  const cabinScreenY = altToY(s.cabin.altitude);
+
+  // If tracking, follow the cabin vertically
+  if (_tracking) {
+    _zoomTargetCY = cabinScreenY;
+  }
+  _zoomCY += (_zoomTargetCY - _zoomCY) * Math.min(1, dt * 9);
+
+  // Star parallax: zoom-centre offset from screen centre
+  const parallaxY = (_zoomCY - H * 0.5) * (_zoom - 1);
+
+  // Where does Earth Base (alt=0, world-Y=_cableYBottom) land after vertical zoom?
+  const earthBaseScreenY = (_cableYBottom - _zoomCY) * _zoom + _zoomCY;
+
+  _drawBackground(ctx, W, H, s.dayTime, s.cabin.altitude, parallaxY, earthBaseScreenY);
+
+  // Zoom around (cableX, _zoomCY): vertical position follows cursor/cabin,
+  // horizontal pivot stays on the cable so nothing drifts sideways.
+  ctx.save();
+  ctx.translate(cableX, _zoomCY);
+  ctx.scale(_zoom, _zoom);
+  ctx.translate(-cableX, -_zoomCY);
   _drawCable(ctx, W, H, s.events);
   _drawStations(ctx, s.cabin);
   _drawParticles(ctx, s.particles, dt);
   _drawCabin(ctx, s.cabin, s.events);
+  ctx.restore();
+
+  // Event FX and HUD are screen-space — no zoom applied
   _drawEventFX(ctx, W, H, s.events, s.cabin, dt);
   _drawAltitudeMarker(ctx, W, H, s.cabin.altitude);
 }
 
 // ── Background ────────────────────────────────────────────────────────────────
-function _drawBackground(ctx, W, H, dayTime, cabinAlt) {
+function _drawBackground(ctx, W, H, dayTime, cabinAlt, parallaxY, earthBaseScreenY) {
   // day: 0 = midnight, 1 = noon
   const day = 0.5 + 0.5 * Math.cos(dayTime * Math.PI * 2);
 
@@ -156,10 +210,11 @@ function _drawBackground(ctx, W, H, dayTime, cabinAlt) {
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, W, H);
 
-  // Stars — slowly rotate around the upper sky; fade near atmosphere
-  const starAngle = _time * 0.000055 * Math.PI * 2; // full rotation ~5 hours
+  // Stars — slowly rotate; shift slightly with parallax (they're very far away)
+  const starAngle = _time * 0.000055 * Math.PI * 2;
   const rotCX = W * 0.5, rotCY = H * 0.32;
   ctx.save();
+  ctx.translate(0, parallaxY * 0.03);   // depth: barely moves
   ctx.translate(rotCX, rotCY);
   ctx.rotate(starAngle);
   ctx.translate(-rotCX, -rotCY);
@@ -175,18 +230,20 @@ function _drawBackground(ctx, W, H, dayTime, cabinAlt) {
   ctx.globalAlpha = 1;
   ctx.restore();
 
-  _drawEarth(ctx, W, H, day);
+  _drawEarth(ctx, W, H, day, earthBaseScreenY);
 }
 
-function _drawEarth(ctx, W, H, day) {
+function _drawEarth(ctx, W, H, day, earthBaseScreenY) {
   // ── Geometry ──────────────────────────────────────────────────────────────
-  // arcCY is positioned so the top of the Earth disc sits at H*(1-visibleFrac)
-  const visibleFrac = 0.22;
-  const arcR  = W * 1.30;
-  const arcCX = W * 0.50;
-  const arcCY = H * (1 - visibleFrac) + arcR;
-  const earthTop = H * (1 - visibleFrac);
-  const stripH   = H - earthTop;
+  const arcR      = W * 1.30 * _zoom;
+  const arcCX     = W * 0.50;
+  // Arc centre sits arcR below the Earth Base station's zoomed screen position,
+  // so the arc top (arcCYsurf - arcR) always coincides with where the cable ends.
+  const arcCYsurf = earthBaseScreenY + arcR;
+  const arcCYatmo = arcCYsurf;   // atmosphere uses same centre, larger radii
+  const earthTop  = earthBaseScreenY;
+  const stripH    = H - earthTop;
+  const cloudShift = 0;
 
   // ── Layered atmosphere arcs ───────────────────────────────────────────────
   ctx.save();
@@ -200,7 +257,7 @@ function _drawEarth(ctx, W, H, day) {
   ];
   for (const L of atmoLayers) {
     ctx.beginPath();
-    ctx.arc(arcCX, arcCY, arcR + L.dr, 0, Math.PI * 2);
+    ctx.arc(arcCX, arcCYatmo, arcR + L.dr, 0, Math.PI * 2);  // atmosphere depth
     ctx.strokeStyle = `hsla(${L.hue},90%,${60 + day*25}%,${L.alpha})`;
     ctx.lineWidth   = L.lw;
     ctx.stroke();
@@ -210,16 +267,15 @@ function _drawEarth(ctx, W, H, day) {
   // ── Surface: procedural texture via per-scanline drawImage ────────────────
   ctx.save();
   ctx.beginPath();
-  ctx.arc(arcCX, arcCY, arcR, 0, Math.PI * 2);
+  ctx.arc(arcCX, arcCYsurf, arcR, 0, Math.PI * 2);  // surface depth
   ctx.clip();
 
-  // Smoothing on for texture stretching, then restore
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'low';
 
   // Earth surface is fixed — no longitudinal rotation
   for (let cy = Math.ceil(earthTop); cy < H; cy++) {
-    const dyUp = arcCY - cy;
+    const dyUp = arcCYsurf - cy;
     const chord = Math.sqrt(Math.max(0, arcR * arcR - dyUp * dyUp));
     if (chord < 1) continue;
 
@@ -269,7 +325,7 @@ function _drawEarth(ctx, W, H, day) {
   ctx.fillStyle = `rgba(255,255,255,${0.055 + day * 0.065})`;
   for (const [fx, fy, rx, ry] of clouds) {
     const cx2 = ((fx * W + cloudRot) % W + W) % W;
-    const cy2 = earthTop + fy * stripH;
+    const cy2 = earthTop + fy * stripH + cloudShift;  // clouds at their own depth
     ctx.beginPath();
     ctx.ellipse(cx2, cy2, rx, ry, 0, 0, Math.PI * 2);
     ctx.fill();
@@ -282,7 +338,7 @@ function _drawEarth(ctx, W, H, day) {
   // ── Horizon limb line ─────────────────────────────────────────────────────
   ctx.save();
   ctx.beginPath();
-  ctx.arc(arcCX, arcCY, arcR + 0.5, 0, Math.PI * 2);
+  ctx.arc(arcCX, arcCYsurf, arcR + 0.5, 0, Math.PI * 2);
   ctx.strokeStyle = `rgba(130,210,255,${0.32 + day * 0.32})`;
   ctx.lineWidth   = 1.5;
   ctx.stroke();
@@ -510,11 +566,11 @@ function _drawEventFX(ctx, W, H, events, cabin, dt) {
 
     if (ev.type === 'DEBRIS') {
       const cabinX = getCableX();
-      const cabinY = altToY(cabin.altitude);
+      const cabinWorldY = altToY(cabin.altitude);
+      const cabinY = (cabinWorldY - _zoomCY) * _zoom + _zoomCY;
       ctx.save();
       ctx.globalAlpha = 0.85;
       for (const dot of ev.dots) {
-        // Update dot positions
         dot.x += dot.vx * dt;
         dot.y += dot.vy * dt;
         ctx.fillStyle = dot.color;
@@ -528,7 +584,7 @@ function _drawEventFX(ctx, W, H, events, cabin, dt) {
       ctx.fillStyle   = '#f80';
       ctx.font        = 'bold 10px Courier New';
       ctx.textAlign   = 'center';
-      ctx.fillText('⚠ DEBRIS FIELD', getCableX(), altToY(cabin.altitude) - 30);
+      ctx.fillText('⚠ DEBRIS FIELD', cabinX, cabinY - 30);
       ctx.textAlign   = 'left';
       ctx.globalAlpha = 1;
     }
@@ -563,7 +619,8 @@ function _drawEventFX(ctx, W, H, events, cabin, dt) {
 // ── Altitude marker (right of cable) ─────────────────────────────────────────
 function _drawAltitudeMarker(ctx, W, H, alt) {
   const cx = getCableX();
-  const cy = altToY(alt);
+  const worldY = altToY(alt);
+  const cy = (worldY - _zoomCY) * _zoom + _zoomCY;
   const km = Math.round(alt * 100000);
   const label = km >= 1000 ? (km / 1000).toFixed(0) + 'k' : km + '';
 

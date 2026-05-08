@@ -4,7 +4,6 @@
 const CONFIG = {
   // ── Canvas layout ───────────────────────────────────
   SIDEBAR_WIDTH: 220,
-  CABLE_X_RATIO: 0.62,
   CABLE_Y_TOP_OFFSET: 50,      // px from top of canvas
   CABLE_Y_BOTTOM_OFFSET: 100,  // px from bottom of canvas
 
