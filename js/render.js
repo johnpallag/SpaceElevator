@@ -9,6 +9,7 @@ let _time = 0;
 // Planet texture (generated once at startup)
 const _TEX_W = 512, _TEX_H = 256;
 let _texCanvas = null;
+let _cloudTextures = [];
 let _perm = new Uint8Array(512);
 
 // ── Shuttles (decorative, top station) ───────────────────────────────────────
@@ -237,6 +238,34 @@ function _generatePlanetTexture() {
   tc.putImageData(img, 0, 0);
 }
 
+// ── Cloud texture generation (once at startup, RGBA: white + alpha) ──────────
+// Horizontally tileable by mapping nx → unit circle: cos/sin are identical at
+// nx=0 and nx=1, so the left and right edges of the texture match exactly.
+function _generateCloudTexture(freqX, freqY, threshold) {
+  const tc = document.createElement('canvas');
+  tc.width = _TEX_W; tc.height = _TEX_H;
+  const tctx = tc.getContext('2d');
+  const img = tctx.createImageData(_TEX_W, _TEX_H);
+  const d = img.data;
+  const R = freqX / (Math.PI * 2);
+
+  for (let ty = 0; ty < _TEX_H; ty++) {
+    for (let tx = 0; tx < _TEX_W; tx++) {
+      const nx = tx / _TEX_W, ny = ty / _TEX_H;
+      const angle = nx * Math.PI * 2;
+      const cx = Math.cos(angle) * R + 12.3;
+      const cz = Math.sin(angle) * R +  8.6;
+      const n = _fbm(cx, cz + ny * freqY, 4);
+      const raw = Math.max(0, (n - threshold) / (1 - threshold));
+      const a = Math.min(255, Math.floor(raw * 6.0 * 255));
+      const i = (ty * _TEX_W + tx) * 4;
+      d[i] = 255; d[i+1] = 255; d[i+2] = 255; d[i+3] = a;
+    }
+  }
+  tctx.putImageData(img, 0, 0);
+  return tc;
+}
+
 // ── Coordinate helpers (exposed globally) ────────────────────────────────────
 window.altToY = function(alt) {
   return _cableYBottom - alt * (_cableYBottom - _cableYTop);
@@ -274,10 +303,13 @@ function renderInit(canvas) {
     });
   }
 
-  // Planet texture: generate only once (seeded noise → stable map)
+  // Planet + cloud textures: generate only once (seeded noise → stable map)
   if (!_texCanvas) {
     _initNoise();
     _generatePlanetTexture();
+    _cloudTextures = [
+      _generateCloudTexture(3.5, 4.0, 0.64),
+    ];
   }
 }
 
@@ -450,27 +482,26 @@ function _drawEarth(ctx, W, H, day, earthBaseScreenY) {
     }
   }
 
-  // ── Cloud layer — drift slowly westward over time ─────────────────────────
-  const cloudRot = (_time * 4.5) % W;  // full traverse in ~5.5 min
-  const clouds = [
-    [0.12, 0.22, W*0.095, W*0.024],
-    [0.38, 0.50, W*0.115, W*0.022],
-    [0.58, 0.35, W*0.085, W*0.019],
-    [0.27, 0.75, W*0.100, W*0.023],
-    [0.72, 0.60, W*0.075, W*0.020],
-    [0.88, 0.30, W*0.068, W*0.018],
-    [0.50, 0.82, W*0.090, W*0.021],
-  ];
-  ctx.fillStyle = `rgba(255,255,255,${0.055 + day * 0.065})`;
-  for (const [fx, fy, rx, ry] of clouds) {
-    const cx2 = ((fx * W + cloudRot) % W + W) % W;
-    const cy2 = earthTop + fy * stripH + cloudShift;  // clouds at their own depth
-    ctx.beginPath();
-    ctx.ellipse(cx2, cy2, rx, ry, 0, 0, Math.PI * 2);
-    ctx.fill();
-    if (cx2 + rx > W) { ctx.beginPath(); ctx.ellipse(cx2 - W, cy2, rx, ry, 0, 0, Math.PI * 2); ctx.fill(); }
-    if (cx2 - rx < 0) { ctx.beginPath(); ctx.ellipse(cx2 + W, cy2, rx, ry, 0, 0, Math.PI * 2); ctx.fill(); }
+  // ── Cloud layer — single noise texture scrolling slowly ─────────────────────
+  const texOff = Math.floor(_time * 7) % _TEX_W;
+  ctx.globalAlpha = 0.55 + day * 0.15;
+  ctx.imageSmoothingEnabled = true;
+  const rightPx = _TEX_W - texOff;
+  const rw = W * rightPx / _TEX_W;
+  ctx.drawImage(_cloudTextures[0], texOff, 0, rightPx, _TEX_H, 0, earthTop, rw, H - earthTop);
+  if (texOff > 0) {
+    ctx.drawImage(_cloudTextures[0], 0, 0, texOff, _TEX_H, rw, earthTop, W - rw, H - earthTop);
   }
+  ctx.globalAlpha = 1;
+  ctx.imageSmoothingEnabled = false;
+
+  // Radial vignette — fades cloud texture to transparent toward the horizon limb.
+  const vigR0 = arcR * 0.82, vigR1 = arcR * 1.02;
+  const vig = ctx.createRadialGradient(arcCX, arcCYsurf, vigR0, arcCX, arcCYsurf, vigR1);
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, 'rgba(0,0,0,0.92)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, earthTop, W, H - earthTop);
 
   ctx.restore();
 
